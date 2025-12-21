@@ -44,12 +44,12 @@ async def text_phrase_input(message: Message, widget: ManagedTextInput, dialog_m
             await bot.send_message(message.chat.id, i18n_format("already-added-this-phrase"))
         else:
             try:
-                spaced_phrase = openai_gpt_add_space(text_phrase)
+                spaced_phrase = await openai_gpt_add_space(text_phrase)
             except Exception as e:
                 logger.error('Ошибка при попытке добавления пробелов: %s', e)
                 spaced_phrase = text_phrase
             try:
-                translation = openai_gpt_translate(text_phrase)
+                translation = await openai_gpt_translate(text_phrase)
             except Exception as e:
                 logger.error('Ошибка при попытке перевода: %s', e)
                 translation = text_phrase

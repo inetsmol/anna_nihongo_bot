@@ -126,8 +126,8 @@ def get_news():
 
                 # Открываем таблицу (замените 'Your Google Sheet Name' на имя вашей таблицы)
                 sheet = client.open('news_nhk_or_jp').sheet1
-                translated_text = openai_gpt_translate(random_today_news.get('full_text'))
-                dictionary = openai_gpt_get_phrase_from_text(random_today_news.get('full_text'))
+                translated_text = await openai_gpt_translate(random_today_news.get('full_text'))
+                dictionary = await openai_gpt_get_phrase_from_text(random_today_news.get('full_text'))
                 row = [
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     random_today_news.get('title', 'Нет заголовка'),

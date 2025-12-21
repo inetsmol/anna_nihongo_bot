@@ -29,7 +29,7 @@ async def change_text_phrase_button_clicked(callback: CallbackQuery, button: But
 async def input_text_phrase(message: Message, widget: ManagedTextInput, dialog_manager: DialogManager, text_phrase: str):
     dialog_manager.dialog_data["text_phrase"] = text_phrase
     try:
-        spaced_phrase = openai_gpt_add_space(text_phrase)
+        spaced_phrase = await openai_gpt_add_space(text_phrase)
     except Exception as e:
         logger.error('Ошибка при попытке добавления пробелов: %s', e)
         spaced_phrase = text_phrase

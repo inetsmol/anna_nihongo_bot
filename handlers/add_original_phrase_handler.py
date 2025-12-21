@@ -87,7 +87,7 @@ async def text_phrase_input(message: Message, widget: ManagedTextInput, dialog_m
             await bot.send_message(message.chat.id, i18n_format("already-added-this-phrase"))
         else:
             dialog_manager.dialog_data["text_phrase"] = text_phrase
-            spaced_phrase = openai_gpt_add_space(text_phrase)
+            spaced_phrase = await openai_gpt_add_space(text_phrase)
             dialog_manager.dialog_data["spaced_phrase"] = spaced_phrase
             await dialog_manager.next()
 
@@ -99,7 +99,7 @@ async def translation_input(message: Message, widget: ManagedTextInput, dialog_m
 
 
 async def translate_phrase(callback: CallbackQuery, button: Button, dialog_manager: DialogManager):
-    translation = openai_gpt_translate(dialog_manager.dialog_data["text_phrase"])
+    translation = await openai_gpt_translate(dialog_manager.dialog_data["text_phrase"])
     dialog_manager.dialog_data["translation"] = translation
 
 
