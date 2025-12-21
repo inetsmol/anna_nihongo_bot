@@ -13,3 +13,6 @@ migrations/
 /temp/
 /anna-nihongo-bot-96c6f518f0cd.json
 /pyproject.toml
+__pycache__/
+external_services/bot-96c6f518f0cd.json
+media/

@@ -4,10 +4,9 @@ import os
 import random
 import re
 import string
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, timedelta, datetime
 
 import pytz
-from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from dotenv import load_dotenv
 from matplotlib import pyplot as plt
