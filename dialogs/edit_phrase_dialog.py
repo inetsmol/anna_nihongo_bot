@@ -28,6 +28,7 @@ async def change_text_phrase_button_clicked(callback: CallbackQuery, button: But
 
 async def input_text_phrase(message: Message, widget: ManagedTextInput, dialog_manager: DialogManager, text_phrase: str):
     dialog_manager.dialog_data["text_phrase"] = text_phrase
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
         spaced_phrase = await openai_gpt_add_space(text_phrase)
     except Exception as e:
@@ -58,13 +59,19 @@ async def input_audio(message: Message, widget: MessageInput, dialog_manager: Di
 
 async def ai_voice_message(callback: CallbackQuery, button: Button, dialog_manager: DialogManager):
     text_phrase = dialog_manager.dialog_data["text_phrase"]
-
-    text_to_speech = await google_text_to_speech(text_phrase)
-    voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
-    msg = await callback.message.answer_voice(voice=voice, caption=i18n_format("new-voice-acting"))
 
-    dialog_manager.dialog_data["audio_id"] = msg.voice.file_id
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_voice")
+    try:
+        text_to_speech = await google_text_to_speech(text_phrase)
+        voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
+        msg = await callback.message.answer_voice(voice=voice, caption=i18n_format("new-voice-acting"))
+
+        dialog_manager.dialog_data["audio_id"] = msg.voice.file_id
+    except Exception as e:
+        logger.error(f'Error generating voice: {e}')
+        await callback.message.answer(i18n_format("failed-generate-voice")) # You might need to add this key to translations or use a generic error
+    
     dialog_manager.show_mode = ShowMode.SEND
     await dialog_manager.switch_to(EditPhraseSG.start)
 
@@ -91,6 +98,7 @@ async def ai_image(callback: CallbackQuery, button: Button, dialog_manager: Dial
     prompt = dialog_manager.dialog_data["prompt"]
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
     await callback.message.answer(i18n_format("starting-generate-image"))
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_photo")
     # Функция для генерации изображения автоматически
     try:
         images = await generate_image(prompt=prompt)

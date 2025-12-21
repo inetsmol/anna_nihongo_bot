@@ -4,11 +4,11 @@ from aiogram_dialog.widgets.input import TextInput, ManagedTextInput
 from aiogram_dialog.widgets.kbd import Select, Group, Cancel, Back
 from aiogram_dialog.widgets.text import Format, Multi
 
-from external_services.google_cloud_services import google_text_to_speech
-from external_services.openai_services import openai_gpt_add_space, openai_gpt_translate
+from bot_init import bot
 from handlers.system_handlers import get_user_categories
 from models import Category, Phrase, User
 from services.i18n_format import I18NFormat, I18N_FORMAT_KEY
+from services.phrase_service import process_new_phrase
 from states import AddPhraseSG
 
 
@@ -35,17 +35,19 @@ async def category_input(message: Message, widget: ManagedTextInput, dialog_mana
 # Хэндлер для ввода текста фразы
 async def phrase_input(message: Message, widget: ManagedTextInput, dialog_manager: DialogManager, text_phrase: str):
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
-    if not await Phrase.get_or_none(text_phrase=text_phrase):
+    text_phrase = text_phrase.strip()
+    
+    # Check for duplicates (case-insensitive)
+    if not await Phrase.filter(text_phrase__iexact=text_phrase).first():
         category_name = dialog_manager.dialog_data['category']
         category = await Category.get(name=category_name)
-        spaced_phrase = await openai_gpt_add_space(text_phrase)
-        translation = await openai_gpt_translate(text_phrase)
+        
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        spaced_phrase, translation, voice, voice_id = await process_new_phrase(text_phrase)
 
-        text_to_speech = await google_text_to_speech(text_phrase)
-        voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
-        i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
-        msg = await message.answer_voice(voice=voice, caption=i18n_format("voice-acting"))
-        voice_id = msg.voice.file_id
+        if voice:
+            msg = await message.answer_voice(voice=voice, caption=i18n_format("voice-acting"))
+            voice_id = msg.voice.file_id
 
         user_id = dialog_manager.event.from_user.id
         user = await User.get_or_none(id=user_id)

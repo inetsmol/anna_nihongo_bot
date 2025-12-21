@@ -10,11 +10,10 @@ from aiogram_dialog.widgets.text import Multi
 from dotenv import load_dotenv
 
 from bot_init import bot
-from external_services.google_cloud_services import google_text_to_speech
 from external_services.kandinsky import generate_image
-from external_services.openai_services import openai_gpt_add_space, openai_gpt_translate
 from models import Phrase, Category, AudioFile, User
 from services.i18n_format import I18NFormat, I18N_FORMAT_KEY
+from services.phrase_service import process_new_phrase
 from states import SmartPhraseAdditionSG, EditPhraseSG
 
 
@@ -36,36 +35,21 @@ async def get_summary_data(dialog_manager: DialogManager, **kwargs):
 async def text_phrase_input(message: Message, widget: ManagedTextInput, dialog_manager: DialogManager,
                             text_phrase: str) -> None:
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
+    text_phrase = text_phrase.strip()
     if len(text_phrase) >= 150:
         await message.answer(i18n_format('sentence-too-long'))
     else:
-        phrase = await Phrase.get_or_none(text_phrase=text_phrase, user_id=message.from_user.id)
+        # Check for duplicates (case-insensitive)
+        phrase = await Phrase.filter(text_phrase__iexact=text_phrase, user_id=message.from_user.id).first()
         if phrase:
-            await bot.send_message(message.chat.id, i18n_format("already-added-this-phrase"))
+            await message.answer(i18n_format("already-added-this-phrase"))
         else:
-            try:
-                spaced_phrase = await openai_gpt_add_space(text_phrase)
-            except Exception as e:
-                logger.error('Ошибка при попытке добавления пробелов: %s', e)
-                spaced_phrase = text_phrase
-            try:
-                translation = await openai_gpt_translate(text_phrase)
-            except Exception as e:
-                logger.error('Ошибка при попытке перевода: %s', e)
-                translation = text_phrase
+            await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            spaced_phrase, translation, voice, voice_id = await process_new_phrase(text_phrase)
 
-            try:
-                text_to_speech = await google_text_to_speech(text_phrase)
-                voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
-            except Exception as e:
-                logger.error('Ошибка при попытке генерации голоса: %s', e)
-                voice = None
             if voice:
-                i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
                 msg = await message.answer_voice(voice=voice, caption=i18n_format("voice-acting"))
                 voice_id = msg.voice.file_id
-            else:
-                voice_id = None
 
             dialog_manager.dialog_data["category_id"] = dialog_manager.start_data["category_id"]
             dialog_manager.dialog_data["text_phrase"] = text_phrase

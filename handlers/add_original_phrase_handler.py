@@ -1,6 +1,10 @@
 import base64
 import logging
 import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+from aiogram.enums import ContentType
 
 from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery, Message, BufferedInputFile
@@ -79,15 +83,22 @@ async def get_data(dialog_manager: DialogManager, **kwargs):
 async def text_phrase_input(message: Message, widget: ManagedTextInput, dialog_manager: DialogManager,
                             text_phrase: str) -> None:
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
+    text_phrase = text_phrase.strip()
     if len(text_phrase) >= 150:
         await message.answer(i18n_format('sentence-too-long'))
     else:
-        phrase = await Phrase.get_or_none(text_phrase=text_phrase, user_id=message.from_user.id)
+        # Check for duplicates (case-insensitive)
+        phrase = await Phrase.filter(text_phrase__iexact=text_phrase, user_id=message.from_user.id).first()
         if phrase:
             await bot.send_message(message.chat.id, i18n_format("already-added-this-phrase"))
         else:
             dialog_manager.dialog_data["text_phrase"] = text_phrase
-            spaced_phrase = await openai_gpt_add_space(text_phrase)
+            await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            try:
+                spaced_phrase = await openai_gpt_add_space(text_phrase)
+            except Exception as e:
+                logger.error(f'Error adding spaces: {e}')
+                spaced_phrase = text_phrase
             dialog_manager.dialog_data["spaced_phrase"] = spaced_phrase
             await dialog_manager.next()
 
@@ -99,82 +110,129 @@ async def translation_input(message: Message, widget: ManagedTextInput, dialog_m
 
 
 async def translate_phrase(callback: CallbackQuery, button: Button, dialog_manager: DialogManager):
-    translation = await openai_gpt_translate(dialog_manager.dialog_data["text_phrase"])
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="typing")
+    try:
+        translation = await openai_gpt_translate(dialog_manager.dialog_data["text_phrase"])
+    except Exception as e:
+        logger.error(f'Error translating: {e}')
+        translation = dialog_manager.dialog_data["text_phrase"] # Fallback
     dialog_manager.dialog_data["translation"] = translation
+
+
+def convert_audio(file_name, file_id, is_voice=False):
+    """
+    Synchronous function to convert audio/voice to OGG OPUS and return base64 data.
+    """
+    try:
+        if not is_voice:
+            # Convert audio to .OGG with OPUS codec
+            audio = AudioSegment.from_file(file_name)
+            audio.export(f"{file_id}.ogg", format="ogg", codec="libopus")
+            
+            # Read converted file
+            with open(f"{file_id}.ogg", "rb") as f:
+                audio_data = f.read()
+
+            # Clean up original file (voice cleanup handled outside if needed, but here file_name is temp)
+            if os.path.exists(file_name):
+                os.remove(file_name)
+        else:
+            # Voice is already OGG usually, but we ensure it's read correctly
+            # In original code it just downloads to .ogg and reads. 
+            # Note: Telegram voice messages are usually OGG OPUS already.
+            # We just read it.
+            with open(f"{file_id}.ogg", "rb") as f:
+                audio_data = f.read()
+
+        audio_data_base64 = base64.b64encode(audio_data).decode("utf-8")
+
+        # Cleanup output file
+        if os.path.exists(f"{file_id}.ogg"):
+            os.remove(f"{file_id}.ogg")
+            
+        return audio_data_base64
+    except Exception as e:
+        logger.error(f"Error converting audio: {e}")
+        # Cleanup on error
+        if os.path.exists(f"{file_id}.ogg"):
+            os.remove(f"{file_id}.ogg")
+        if not is_voice and os.path.exists(file_name):
+             os.remove(file_name)
+        raise e
 
 
 async def audio_handler(message: Message, widget: MessageInput, dialog_manager: DialogManager):
     file_id = message.audio.file_id if message.audio else message.voice.file_id
+    loop = asyncio.get_running_loop()
+    await bot.send_chat_action(chat_id=message.chat.id, action="upload_voice")
+
     if message.audio:
         file_name = message.audio.file_name
         file = await bot.get_file(file_id)
         file_path = file.file_path
         await bot.download_file(file_path, file_name)
 
-        # Конвертирование аудио в формат .OGG с кодеком OPUS
-        audio = AudioSegment.from_file(file_name)
-        audio.export(f"{file_id}.ogg", format="ogg", codec="libopus")
+        try:
+             # Run synchronous conversion in executor
+            audio_data_base64 = await loop.run_in_executor(None, convert_audio, file_name, file_id, False)
 
-        # Чтение сконвертированного аудио файла
-        with open(f"{file_id}.ogg", "rb") as f:
-            audio_data = f.read()
-
-        audio_data_base64 = base64.b64encode(audio_data).decode("utf-8")
-
-        # Удаление временных файлов
-        os.remove(file_name)
-        os.remove(f"{file_id}.ogg")
-
-        audio = {
-            "tg_id": "",
-            "audio": audio_data_base64
-        }
-        dialog_manager.dialog_data["audio"] = audio
+            audio = {
+                "tg_id": "",
+                "audio": audio_data_base64
+            }
+            dialog_manager.dialog_data["audio"] = audio
+        except Exception as e:
+             logger.error(f"Failed to process audio: {e}")
+             # Optionally notify user
+             return
 
     elif message.voice:
         file = await bot.get_file(file_id)
         file_path = file.file_path
         await bot.download_file(file_path, f"{file_id}.ogg")
-
-        # Чтение голосового сообщения
-        with open(f"{file_id}.ogg", "rb") as f:
-            audio_data = f.read()
-
-        audio_data_base64 = base64.b64encode(audio_data).decode("utf-8")
-
-        # Удаление временного файла
-        os.remove(f"{file_id}.ogg")
-
-        audio = {
-            "tg_id": file_id,
-            "audio": audio_data_base64
-        }
-        dialog_manager.dialog_data["audio"] = audio
+        
+        try:
+            # Run synchronous read in executor (IO bound but keeps event loop free)
+             audio_data_base64 = await loop.run_in_executor(None, convert_audio, None, file_id, True)
+             
+             audio = {
+                "tg_id": file_id,
+                "audio": audio_data_base64
+            }
+             dialog_manager.dialog_data["audio"] = audio
+        except Exception as e:
+            logger.error(f"Failed to process voice: {e}")
+            return
 
     await dialog_manager.next()
 
 
 async def ai_voice_message(callback: CallbackQuery, button: Button, dialog_manager: DialogManager):
     text_phrase = dialog_manager.dialog_data["text_phrase"]
-
-    text_to_speech = await google_text_to_speech(text_phrase)
-    voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
-    msg = await callback.message.answer_voice(voice=voice, caption=i18n_format("voice-acting"))
-    voice_id = msg.voice.file_id
 
-    audio = await AudioFile.create(
-        tg_id=voice_id,
-        audio=voice.data
-    )
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_voice")
+    try:
+        text_to_speech = await google_text_to_speech(text_phrase)
+        voice = BufferedInputFile(text_to_speech.audio_content, filename="voice_tts.ogg")
+        msg = await callback.message.answer_voice(voice=voice, caption=i18n_format("voice-acting"))
+        voice_id = msg.voice.file_id
 
-    audio = {
-        "tg_id": voice_id,
-        "audio_id": audio.id
-    }
-    dialog_manager.dialog_data["audio"] = audio
+        audio = await AudioFile.create(
+            tg_id=voice_id,
+            audio=voice.data
+        )
 
-    await dialog_manager.next(show_mode=ShowMode.SEND)
+        audio = {
+            "tg_id": voice_id,
+            "audio_id": audio.id
+        }
+        dialog_manager.dialog_data["audio"] = audio
+        await dialog_manager.next(show_mode=ShowMode.SEND)
+        
+    except Exception as e:
+        logger.error(f'Error generating voice: {e}')
+        await callback.message.answer(i18n_format("failed-generate-voice"))
 
 
 async def image_handler(message: Message, widget: MessageInput, dialog_manager: DialogManager):
@@ -187,6 +245,7 @@ async def ai_image(callback: CallbackQuery, button: Button, dialog_manager: Dial
     dialog_manager.dialog_data["prompt"] = dialog_manager.dialog_data["translation"]
     i18n_format = dialog_manager.middleware_data.get(I18N_FORMAT_KEY)
     await callback.message.answer(i18n_format("starting-generate-image"))
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_photo")
     # Функция для генерации изображения автоматически
     try:
         images = await generate_image(prompt=dialog_manager.dialog_data["prompt"])
