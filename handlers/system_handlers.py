@@ -127,7 +127,12 @@ async def get_phrases(dialog_manager: DialogManager, **kwargs):
 
     category = await Category.get_or_none(id=category_id)
     user_id = dialog_manager.event.from_user.id
-    user_phrases = await Phrase.filter(category_id=category_id, user_id=user_id).all()
+
+    if category.public:
+        user_phrases = await Phrase.filter(category_id=category_id).all()
+    else:
+        user_phrases = await Phrase.filter(category_id=category_id, user_id=user_id).all()
+
     phrases = [(phrase.text_phrase, str(phrase.id)) for phrase in user_phrases]
     if phrases:
         show_random_button = True
